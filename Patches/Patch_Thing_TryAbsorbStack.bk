@@ -1,0 +1,57 @@
+﻿// --------------------------------------------------------------------------------------
+// File: Patch_Thing_TryAbsorbStack.cs
+// Purpose: Harmony patch for Thing.TryAbsorbStack to track stack merges involving hidden MFS items.
+// - Records stack delta if original item was in a hidden MFS cell.
+// - Applies delta to Building_MassStorageUnitMulti to maintain item count integrity.
+// --------------------------------------------------------------------------------------
+
+using System.Linq; // For future-safe access if needed
+using HarmonyLib; // Harmony for patching
+using ProjectRimFactory.Common; // For shared PRF infrastructure
+using ProjectRimFactory.Storage; // For I/O and DSU definitions
+using Verse; // RimWorld base types
+
+namespace MultiFloorStorage.Patches
+{
+    [HarmonyPatch(typeof(Thing), nameof(Thing.TryAbsorbStack))]
+    public static class Patch_Thing_TryAbsorbStackMulti
+    {
+        // Safe helper to get the first building of a specific type at a position
+        public static T Get<T>(Map map, IntVec3 pos) where T : class
+        {
+            return pos.IsValid ? pos.GetFirst<T>(map) : null;
+        }
+
+        private static Components.MFSMapComponent mfsComponent; // Cached per call
+        private static bool wasInHiddenCell = false; // Whether the original item was hidden
+        private static int originalCount = 0; // Original stack count before merge
+
+        // Prefix runs before stacking logic
+        public static bool Prefix(Thing __instance, Thing other)
+        {
+            // Get MFS map component
+            mfsComponent = Util.PatchStorageUtilMulti.GetMFSMapComponent(__instance.Map);
+
+            // Check if item was in a hidden cell
+            wasInHiddenCell = mfsComponent?.ShouldHideItemsAtPos(__instance.Position) ?? false;
+
+            if (wasInHiddenCell)
+                originalCount = other.stackCount; // Record stack count before merge
+
+            return true; // Always continue to vanilla stack logic
+        }
+
+        // Postfix runs after stacking logic
+        public static void Postfix(Thing __instance, Thing other)
+        {
+            if (!wasInHiddenCell)
+                return; // Skip if item wasn't in a hidden cell
+
+            // Get the Mass Storage Unit at the position
+            var dsu = Get<Buildings.Building_MassStorageUnitMulti>(__instance.Map, __instance.Position);
+
+            // Apply the delta to track reduction in other.stackCount
+            dsu?.ItemCountsAdded(other.def, originalCount - other.stackCount);
+        }
+    }
+}
